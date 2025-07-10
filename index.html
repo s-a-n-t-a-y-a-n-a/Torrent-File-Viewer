@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Torrent File Viewer</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      padding: 20px;
+    }
+    .custom-file {
+      display: inline-block;
+      position: relative;
+      overflow: hidden;
+      margin: 10px 0;
+    }
+    .custom-file input[type="file"] {
+      position: absolute;
+      left: 0;
+      top: 0;
+      opacity: 0;
+      width: 100%;
+      height: 100%;
+      cursor: pointer;
+    }
+    .custom-file-label {
+      display: inline-block;
+      background-color: #007BFF;
+      color: white;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    #fileName {
+      margin-left: 10px;
+      font-style: italic;
+    }
+    button {
+      margin: 10px 0;
+      padding: 8px 16px;
+      border: none;
+      background-color: #28a745;
+      color: white;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #218838;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-top: 20px;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 8px;
+      text-align: left;
+    }
+    th {
+      background-color: #f4f4f4;
+      cursor: pointer;
+    }
+    .sort-indicator {
+      margin-left: 5px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Torrent File Viewer</h1>
+  <div class="custom-file">
+    <label class="custom-file-label">
+      Choose torrent file
+      <input type="file" id="torrentFile" accept=".torrent">
+    </label>
+    <span id="fileName"></span>
+  </div>
+  <br>
+  <button onclick="parseTorrent()">Get torrent information</button>
+
+  <div id="output"></div>
+
+  <script>
+    const bencode = {
+      decode(data) {
+        let pos = 0;
+        function decodeNext() {
+          const char = String.fromCharCode(data[pos]);
+          if (char === 'i') {
+            pos++;
+            let end = data.indexOf(101, pos);
+            const num = parseInt(new TextDecoder().decode(data.slice(pos, end)));
+            pos = end + 1;
+            return num;
+          }
+          if (char === 'l') {
+            pos++;
+            const list = [];
+            while (data[pos] !== 101) list.push(decodeNext());
+            pos++;
+            return list;
+          }
+          if (char === 'd') {
+            pos++;
+            const dict = {};
+            while (data[pos] !== 101) {
+              const key = decodeNext();
+              const val = decodeNext();
+              dict[new TextDecoder().decode(key)] = val;
+            }
+            pos++;
+            return dict;
+          }
+          if (/[0-9]/.test(char)) {
+            let colon = data.indexOf(58, pos);
+            let len = parseInt(new TextDecoder().decode(data.slice(pos, colon)));
+            pos = colon + 1;
+            const str = data.slice(pos, pos + len);
+            pos += len;
+            return str;
+          }
+          throw new Error("Invalid bencode format");
+        }
+        return decodeNext();
+      }
+    };
+
+    document.getElementById('torrentFile').addEventListener('change', function() {
+      const file = this.files[0];
+      document.getElementById('fileName').textContent = file ? file.name : '';
+    });
+
+    function parseTorrent() {
+      const fileInput = document.getElementById('torrentFile');
+      const file = fileInput.files[0];
+      if (!file) return alert("Please choose a .torrent file first.");
+      const reader = new FileReader();
+      reader.onload = function(event) {
+        try {
+          const buffer = new Uint8Array(event.target.result);
+          const decoded = bencode.decode(buffer);
+          const info = decoded['info'];
+          let fileList = [];
+          let totalLength = 0;
+
+          if (Array.isArray(info['files'])) {
+            fileList = info['files'].map(f => ({
+              path: f['path'].map(p => new TextDecoder().decode(p)).join('/'),
+              length: f['length']
+            }));
+          } else if (info['name'] && info['length']) {
+            fileList = [{
+              path: new TextDecoder().decode(info['name']),
+              length: info['length']
+            }];
+          } else {
+            document.getElementById('output').innerHTML = '<p>Could not parse torrent file structure.</p>';
+            return;
+          }
+
+          let table = `<table id=\"fileTable\"><thead><tr>` +
+                      '<th onclick="sortTable(0)">#<span class="sort-indicator"></span></th>' +
+                      '<th onclick="sortTable(1)">Path<span class="sort-indicator"></span></th>' +
+                      '<th onclick="sortTable(2)">Length (bytes)<span class="sort-indicator"></span></th>' +
+                      '</tr></thead><tbody>';
+
+          fileList.forEach((file, index) => {
+            totalLength += file.length;
+            table += `<tr><td>${index + 1}</td><td>${file.path}</td><td>${file.length.toLocaleString('en-US').replace(/,/g, ' ')}</td></tr>`;
+          });
+          table += `</tbody></table>`;
+const nameLabel = Array.isArray(info['files']) ? 'Folder name' : 'File name';
+const nameValue = new TextDecoder().decode(info['name']);
+const countHTML = `<p><strong>${nameLabel}:</strong> ${nameValue}</p><p><strong>Number of files:</strong> ${fileList.length}</p>`;
+const totalHTML = `<p><strong>Total size:</strong> ${totalLength.toLocaleString('en-US').replace(/,/g, ' ')} bytes</p>`;
+document.getElementById('output').innerHTML = countHTML + totalHTML + table;
+return;
+          // replaced by totalHTML + table above
+        } catch (err) {
+          document.getElementById('output').innerHTML = '<p>Error parsing torrent file.</p>';
+          console.error(err);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function sortTable(colIndex) {
+      const table = document.getElementById("fileTable");
+      const rows = Array.from(table.rows).slice(1);
+      let ascending = table.getAttribute("data-sort-col") != colIndex.toString() || table.getAttribute("data-sort-dir") === "desc";
+
+      rows.sort((a, b) => {
+        const valA = a.cells[colIndex].innerText;
+        const valB = b.cells[colIndex].innerText;
+        if (colIndex === 0 || colIndex === 2) {
+  const numA = Number(valA.replace(/\s/g, ''));
+  const numB = Number(valB.replace(/\s/g, ''));
+  return ascending ? (numA - numB) : (numB - numA);
+}
+ else {
+          return ascending ? valA.localeCompare(valB) : valB.localeCompare(valA);
+        }
+      });
+
+      const tbody = table.tBodies[0];
+      rows.forEach(row => tbody.appendChild(row));
+      table.setAttribute("data-sort-col", colIndex);
+      table.setAttribute("data-sort-dir", ascending ? "asc" : "desc");
+
+      const headers = table.tHead.rows[0].cells;
+      for (let i = 0; i < headers.length; i++) {
+        const span = headers[i].querySelector('.sort-indicator');
+        if (i === colIndex) {
+          span.textContent = ascending ? '▲' : '▼';
+        } else {
+          span.textContent = '';
+        }
+      }
+    }
+  </script>
+</body>
+</html>
